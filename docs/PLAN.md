@@ -4,7 +4,7 @@
 
 Phase-by-phase implementation of `text2sql-agent` — a **production-safe**
 PostgreSQL Text2SQL agent using LangGraph, MCP protocol, ChromaDB RAG, and
-multi-provider LLM support.
+OpenAI GPT.
 
 **Target stack:** Python 3.11+, FastAPI, LangGraph, ChromaDB, httpx
 
@@ -25,8 +25,8 @@ built into the foundation, not bolted on later. Implementation stays minimal
 | 1.2 | Create `.env.example` with all config vars | `.env.example` |
 | 1.3 | Create `.gitignore` | `.gitignore` |
 | 1.4 | Implement `config.py` with Pydantic Settings (incl. `table_allowlist`, `default_execute=false`) | `src/text2sql_agent/config.py` |
-| 1.5 | Create FastAPI app with `/health` endpoint | `src/text2sql_agent/api/app.py` |
-| 1.6 | Verify: `uvicorn text2sql_agent.api.app:app` starts | — |
+| 1.5 | Create FastAPI app with `/health` endpoint | `src/text2sql_agent/main.py` |
+| 1.6 | Verify: `uvicorn text2sql_agent.main:app` starts | — |
 
 **Dependencies:** None
 **Exit criteria:** Server starts, `/health` returns 200. Config loads with policy fields.
@@ -51,7 +51,7 @@ built into the foundation, not bolted on later. Implementation stays minimal
 
 ## Phase 3: LLM Provider Abstraction
 
-**Goal:** Configurable LLM client supporting Gemini, OpenAI, Claude + prompt templates.
+**Goal:** OpenAI LLM client (GPT-4o) + prompt templates.
 
 | Task | Description | Files |
 |------|-------------|-------|
@@ -326,7 +326,7 @@ Idempotent. Safe to re-run.
 #   - severity=error → route to repair_sql (counts toward max_repair_attempts)
 #   - severity=warning → proceed, include warning in response
 #   - severity=info → proceed silently
-# Implementation: LLM (use fast model like gemini-2.0-flash for speed)
+# Implementation: LLM (use gpt-4o-mini for speed)
 ```
 
 **Dependencies:** Phases 2, 3, 4
@@ -393,8 +393,8 @@ def route_after_semantic_check(state):
 
 | Task | Description | Files |
 |------|-------------|-------|
-| 7.1 | Request/response Pydantic models (incl. clarification response type) | `src/text2sql_agent/api/models.py` |
-| 7.2 | `POST /query/preview` — generate + validate SQL only | `src/text2sql_agent/api/app.py` |
+| 7.1 | Request/response Pydantic models (incl. clarification response type) | `src/text2sql_agent/models.py` |
+| 7.2 | `POST /query/preview` — generate + validate SQL only | `src/text2sql_agent/main.py` |
 | 7.3 | `POST /query/execute` — generate + validate + execute | same |
 | 7.4 | `POST /query/stream` — SSE streaming of agent steps | same |
 | 7.5 | Error handling middleware | same |
@@ -614,6 +614,6 @@ Phases 2, 3, 4 can be developed **in parallel** after Phase 1.
 
 8. **LangGraph over plain LangChain** — Explicit state machine with conditional routing. Safety gates are graph edges, not middleware hacks.
 
-9. **Multi-provider LLM** — No vendor lock-in. Switch via env var.
+9. **OpenAI GPT** — Using GPT-4o as primary model. Can switch model via env var.
 
 10. **YAML examples, version-controlled** — Reviewable, auditable. Seeded at startup. No runtime mutations to example store.

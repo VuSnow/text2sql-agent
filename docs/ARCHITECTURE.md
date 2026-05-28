@@ -44,11 +44,11 @@ not duplicated logic.
                     │                  │              │
                     ▼                  ▼              ▼
          ┌──────────────────┐  ┌────────────┐  ┌───────────────┐
-         │ postgresql-mcp-  │  │  ChromaDB  │  │  LLM API      │
-         │ server (port     │  │  (embedded/│  │  (Gemini/     │
-         │ 8000)            │  │   persist) │  │   OpenAI/     │
-         │                  │  └────────────┘  │   Anthropic)  │
-         │ ENFORCES:        │                  └───────────────┘
+         │ postgresql-mcp-  │  │  ChromaDB  │  │  OpenAI API    │
+         │ server (port     │  │  (embedded/│  │  (GPT-4o)      │
+         │ 8000)            │  │   persist) │  │               │
+         │                  │  └────────────┘  └───────────────┘
+         │ ENFORCES:        │
          │ - AST validation │
          │ - column policy  │
          │ - row limit      │
@@ -90,7 +90,7 @@ not duplicated logic.
 
 ## Component Design
 
-### 1. FastAPI Server (`api/app.py`)
+### 1. FastAPI Server (`main.py`)
 
 Entry point for external clients. Exposes REST endpoints:
 
@@ -334,8 +334,8 @@ Output JSON:
 - `warning` → proceed, include warning in response metadata
 - `info` → proceed silently
 
-**Performance note:** This adds one LLM call. To limit latency, use a fast model
-(e.g., `gemini-2.0-flash`) for this check, not the full generation model.
+**Performance note:** This adds one LLM call. To limit latency, use a faster model
+(e.g., `gpt-4o-mini`) for this check, not the full generation model.
 
 ### 3. MCP Client (`mcp/client.py`)
 
@@ -559,19 +559,17 @@ python -m text2sql_agent.rag.seed
 
 ### 5. LLM Provider (`llm/provider.py`)
 
-Abstraction over multiple LLM providers using LangChain's chat model interface.
+OpenAI LLM client using LangChain's chat model interface.
 
 ```python
-def get_llm(provider: str, model: str, api_key: str, temperature: float) -> BaseChatModel:
-    match provider:
-        case "gemini":    return ChatGoogleGenerativeAI(...)
-        case "openai":    return ChatOpenAI(...)
-        case "anthropic": return ChatAnthropic(...)
+def get_llm(model: str, api_key: str, temperature: float) -> BaseChatModel:
+    return ChatOpenAI(model=model, api_key=api_key, temperature=temperature)
 ```
 
-Used in three nodes:
+Used in four nodes:
 - `classify_request`: Structured output for intent classification
 - `generate_sql`: System prompt with schema + examples + policy → generate SQL
+- `semantic_check_sql`: Validate semantic correctness (can use faster model)
 - `repair_sql`: System prompt with error + original SQL → fix SQL
 
 #### Policy-Aware SQL Generation Prompt
@@ -610,8 +608,8 @@ class Settings(BaseSettings):
     mcp_server_url: str = "http://localhost:8000"
 
     # LLM
-    llm_provider: LLMProvider  # gemini | openai | anthropic
-    llm_model: str = "gemini-2.0-flash"
+    llm_provider: LLMProvider  # openai
+    llm_model: str = "gpt-4o"
     llm_api_key: str = ""
     llm_temperature: float = 0.0
 

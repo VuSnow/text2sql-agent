@@ -3,7 +3,7 @@
 Text2SQL agent that converts natural language questions into PostgreSQL queries.
 Built with LangGraph for agentic workflow, connects to `postgresql-mcp-server`
 via MCP protocol for schema exploration and query validation, uses ChromaDB for
-RAG-based SQL example retrieval, and supports multiple LLM providers.
+RAG-based SQL example retrieval, powered by OpenAI GPT models.
 
 ## Architecture
 
@@ -42,9 +42,9 @@ User Question (natural language)
          │                     │                │
          ▼                     ▼                ▼
 ┌─────────────────┐   ┌──────────────┐  ┌───────────────────────┐
-│ LLM Provider    │   │   ChromaDB   │  │ postgresql-mcp-server │
-│ (Gemini/GPT/    │   │  (embedded)  │  │ (schema, dry_run,     │
-│  Claude)        │   │              │  │  execute, policy)     │
+│ OpenAI API      │   │   ChromaDB   │  │ postgresql-mcp-server │
+│ (GPT-4o)        │   │  (embedded)  │  │ (schema, dry_run,     │
+│                 │   │              │  │  execute, policy)     │
 └─────────────────┘   └──────────────┘  └───────────────────────┘
 ```
 
@@ -57,7 +57,7 @@ See [docs/PLAN.md](docs/PLAN.md) for implementation plan.
 - **Clarification Flow** — asks targeted questions for ambiguous input instead of guessing
 - **MCP Integration** — connects to `postgresql-mcp-server` for schema exploration and query validation/execution
 - **Schema Enrichment** — merges raw MCP schema with business-level NL descriptions
-- **Multi-LLM Support** — Google Gemini, OpenAI GPT-4, Anthropic Claude (configurable via env)
+- **OpenAI GPT** — powered by GPT-4o (configurable model via env)
 - **RAG Pipeline** — vector similarity search over curated SQL examples using ChromaDB
 - **Self-Repair Loop** — validates SQL via `dry_run_query`, auto-fixes errors up to N retries
 - **Semantic Validation** — LLM-based check for join correctness, aggregation logic, date filters
@@ -83,7 +83,7 @@ cp .env.example .env
 python -m text2sql_agent.rag.seed
 
 # Run
-uvicorn text2sql_agent.api.app:app --reload --port 8001
+uvicorn text2sql_agent.main:app --reload --port 8001
 
 # Or with Docker
 docker compose up
@@ -94,9 +94,9 @@ docker compose up
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MCP_SERVER_URL` | postgresql-mcp-server endpoint | `http://localhost:8000` |
-| `LLM_PROVIDER` | `gemini` / `openai` / `anthropic` | `gemini` |
-| `LLM_MODEL` | Model name | `gemini-2.0-flash` |
-| `LLM_API_KEY` | API key for chosen provider | — |
+| `LLM_PROVIDER` | `openai` | `openai` |
+| `LLM_MODEL` | OpenAI model name | `gpt-4o` |
+| `LLM_API_KEY` | OpenAI API key | — |
 | `CHROMA_PERSIST_DIR` | ChromaDB storage path | `./data/chroma` |
 | `MAX_REPAIR_ATTEMPTS` | SQL repair retry limit | `3` |
 | `RAG_TOP_K` | Number of similar examples to retrieve | `5` |
@@ -108,9 +108,8 @@ docker compose up
 
 ```
 src/text2sql_agent/
-├── api/              # FastAPI endpoints
-│   ├── app.py
-│   └── models.py     # Request/response Pydantic models
+├── main.py           # FastAPI app entry point + logger
+├── config.py         # Pydantic Settings & env config
 ├── agent/            # LangGraph workflow
 │   ├── graph.py      # Agent graph definition
 │   ├── state.py      # Agent state schema
@@ -130,14 +129,14 @@ src/text2sql_agent/
 ├── rag/              # Vector store & embedding
 │   ├── store.py      # ChromaDB operations (2 collections)
 │   └── seed.py       # Seed schema + examples into vector store
-├── llm/              # LLM provider abstraction
+├── llm/              # LLM provider (OpenAI)
 │   ├── provider.py
 │   └── prompts.py    # All prompt templates
 ├── eval/             # Evaluation framework
 │   ├── runner.py     # Eval runner
 │   ├── sql_compare.py # SQL equivalence checker
 │   └── metrics.py    # Metrics computation
-└── config.py         # Settings & env config
+└── models.py         # Request/response Pydantic models
 
 data/
 ├── schema/           # Table descriptions (YAML)

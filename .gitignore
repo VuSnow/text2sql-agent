@@ -178,6 +178,14 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
+# Project-specific
+data/chroma/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+
 # Cython debug symbols
 cython_debug/
 
