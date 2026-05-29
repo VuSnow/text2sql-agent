@@ -124,8 +124,9 @@ src/text2sql_agent/
 │       ├── semantic_check.py # Semantic correctness check
 │       ├── repair.py         # SQL repair via LLM
 │       └── execute.py        # Conditional execution
-├── mcp/              # MCP client connector
-│   └── client.py
+├── mcp_client/       # MCP client connector (layered)
+│   ├── base.py       # BaseMCPClient (transport) + BaseSQLMCPClient (SQL interface)
+│   └── postgresql_client.py  # PostgreSQLMCPClient (FastMCP Streamable HTTP)
 ├── rag/              # Vector store & embedding
 │   ├── store.py      # ChromaDB operations (2 collections)
 │   └── seed.py       # Seed schema + examples into vector store
@@ -147,8 +148,52 @@ data/
     └── banking_eval.yaml
 
 tests/
+├── manual/          # Manual smoke tests for MCP and FastAPI health
+│   ├── test_mcp_smoke.py
+│   └── test_agent_health_smoke.py
 ├── unit/
 └── integration/
+```
+
+## Manual Smoke Tests
+
+Start `postgresql-mcp-server` with Streamable HTTP transport first:
+
+```bash
+cd ../postgresql-mcp-server
+
+# Set POSTGRESQL_CONNECTION_STRING in your shell or .env first.
+# Example shape only: postgresql://<user>:<password>@<host>:<port>/<db_name>
+fastmcp run src/postgresql_mcp/app.py:mcp \
+    --transport streamable-http \
+    --host <mcp_host> \
+    --port <mcp_port>
+```
+
+Run direct MCP smoke test from `text2sql-agent`:
+
+```bash
+cd /path/to/text2sql-agent
+
+POSTGRESQL_MCP_SERVER_URL="http://<mcp_host>:<mcp_port>/mcp/" \
+conda run -n eog-agent python tests/manual/test_mcp_smoke.py
+```
+
+Run FastAPI health smoke test:
+
+```bash
+cd /path/to/text2sql-agent
+
+POSTGRESQL_MCP_SERVER_URL="http://<mcp_host>:<mcp_port>/mcp/" \
+conda run -n eog-agent uvicorn text2sql_agent.main:app --host <agent_host> --port <agent_port> --reload
+```
+
+In another terminal:
+
+```bash
+cd /path/to/text2sql-agent
+AGENT_BASE_URL="http://<agent_host>:<agent_port>" \
+conda run -n eog-agent python tests/manual/test_agent_health_smoke.py
 ```
 
 ## API Endpoints
@@ -183,6 +228,17 @@ python -m text2sql_agent.eval.run --dataset data/eval/banking_eval.yaml
 ```
 
 Key metrics: Execution Accuracy (≥85%), Schema Linking (≥95%), Classification (≥98%), Policy Violation Rate (≤2%).
+
+## Roadmap
+
+**Current:** Single PostgreSQL backend via `postgresql-mcp-server`.
+
+**Planned:**
+- Multi-backend support (BigQuery, MySQL) via registry-based factory — switch with `MCP_BACKEND` env var
+- Cross-database queries — agent orchestrates sub-queries across multiple backends and merges results
+- Federated query engine integration (Trino/Presto) for complex cross-db analytics
+
+See [docs/PLAN.md](docs/PLAN.md) Phase 12 for details.
 
 ## License
 

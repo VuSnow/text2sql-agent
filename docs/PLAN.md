@@ -35,17 +35,26 @@ built into the foundation, not bolted on later. Implementation stays minimal
 
 ## Phase 2: MCP Client
 
-**Goal:** Async client that can call `postgresql-mcp-server` tools.
+**Goal:** Layered async MCP client with stable SQL interface for agent nodes.
 
 | Task | Description | Files |
 |------|-------------|-------|
-| 2.1 | Implement MCP client with httpx (SSE transport) | `src/text2sql_agent/mcp/client.py` |
-| 2.2 | Wrapper methods: `list_schemas`, `list_tables`, `get_table_schema`, `get_constraints`, `dry_run_query`, `execute_query` | same |
-| 2.3 | Connection health check and retry logic | same |
-| 2.4 | Unit tests with mocked responses | `tests/unit/test_mcp_client.py` |
+| 2.1 | Abstract base classes: `BaseMCPClient` (transport) + `BaseSQLMCPClient` (SQL interface) | `src/text2sql_agent/mcp_client/base.py` |
+| 2.2 | `PostgreSQLMCPClient`: implements transport via FastMCP Client (Streamable HTTP), maps SQL interface to postgresql-mcp-server tools | `src/text2sql_agent/mcp_client/postgresql_client.py` |
+| 2.3 | Package exports (`__init__.py`) | `src/text2sql_agent/mcp_client/__init__.py` |
+| 2.4 | Connection health check and retry logic | `src/text2sql_agent/mcp_client/postgresql_client.py` |
+| 2.5 | Update `/health` endpoint to check MCP connectivity | `src/text2sql_agent/main.py` |
+| 2.6 | Unit tests with mocked responses | `tests/unit/test_mcp_client.py` |
+
+**Architecture:**
+```
+BaseMCPClient (transport: _call_tool, health_check)
+  └── BaseSQLMCPClient (SQL interface: list_schemas, list_tables, ...)
+        └── PostgreSQLMCPClient (FastMCP Streamable HTTP)
+```
 
 **Dependencies:** Phase 1, running `postgresql-mcp-server`
-**Exit criteria:** Can call MCP tools and get schema info from a test database.
+**Exit criteria:** Can call MCP tools and get schema info from a test database. Agent nodes depend only on `BaseSQLMCPClient`.
 
 ---
 
@@ -568,6 +577,64 @@ Optional improvements after core is stable:
 
 ---
 
+## Phase 12: Multi-Backend & Cross-Database Query (Future)
+
+**Goal:** Support multiple database backends simultaneously (PostgreSQL + BigQuery + others)
+and enable cross-database queries where the agent orchestrates data from multiple sources.
+
+**Current state:** Architecture already supports multi-backend via registry-based factory
+(`mcp_client_registry.register("backend_name")`). Phase 12 extends this to **concurrent
+multi-backend** within a single query.
+
+| Task | Description | Files |
+|------|-------------|-------|
+| 12.1 | `BigQueryMCPClient` — implements `BaseSQLMCPClient` for `bq-mcp-server` | `src/text2sql_agent/mcp_client/bigquery_client.py` |
+| 12.2 | Multi-backend config: map logical names to MCP server URLs | `src/text2sql_agent/config.py` |
+| 12.3 | `MCPClientPool` — manages multiple client instances, keyed by backend | `src/text2sql_agent/mcp_client/pool.py` |
+| 12.4 | Backend router: classify which backend(s) a question needs | `src/text2sql_agent/agent/nodes/route_backend.py` |
+| 12.5 | Schema-aware routing: embed table descriptions per backend in ChromaDB with backend metadata | `src/text2sql_agent/rag/store.py` |
+| 12.6 | Cross-database orchestration: agent decomposes into sub-queries per backend, merges results | `src/text2sql_agent/agent/nodes/cross_db.py` |
+| 12.7 | Update agent state to track per-backend SQL + results | `src/text2sql_agent/agent/state.py` |
+| 12.8 | Integration tests with both PG and BQ backends | `tests/integration/test_multi_backend.py` |
+
+**Cross-database query strategy:**
+```
+User: "So sánh doanh thu Q1 (warehouse) với số dư hiện tại (operational)"
+         │
+         ▼
+  route_backend → identifies: [bigquery, postgresql]
+         │
+         ├── BigQuery: SELECT customer_id, SUM(revenue) FROM warehouse.sales ...
+         └── PostgreSQL: SELECT id, balance FROM customers ...
+         │
+         ▼
+  cross_db_merge → join results in Python (pandas/dict merge on customer_id)
+         │
+         ▼
+  return combined results
+```
+
+**Routing approaches (choose one):**
+
+1. **Schema-scope first (recommended):** ChromaDB `schema_descriptions` stores backend metadata
+   per table. `select_schema_scope` node returns candidate tables with their backend.
+   If all tables are on one backend → single query. If mixed → cross-db orchestration.
+
+2. **Explicit user hint:** User specifies backend in question ("from warehouse...").
+
+3. **LLM classification:** Add backend routing to classification prompt.
+
+**Constraints:**
+- Cross-database JOINs happen in application memory (Python), not SQL
+- Each sub-query respects its own MCP server's guardrails independently
+- Result merging limited to simple key-based joins (no complex aggregations across backends)
+- Consider using Trino/Presto as federated query layer for complex cross-db analytics
+
+**Dependencies:** Phase 6 (agent graph complete), Phase 11.10 (data value grounding)
+**Exit criteria:** Agent can answer questions requiring data from 2+ backends in a single request.
+
+---
+
 ## Dependency Graph
 
 ```
@@ -590,6 +657,9 @@ Phase 1 (Foundation + Policy Config)
                                                                         │
                                                                         ▼
                                                                Phase 11 (Enhancements)
+                                                                        │
+                                                                        ▼
+                                                               Phase 12 (Multi-Backend + Cross-DB)
 ```
 
 Phases 2, 3, 4 can be developed **in parallel** after Phase 1.

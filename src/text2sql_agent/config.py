@@ -10,7 +10,8 @@ class LLMProvider(str, Enum):
 
 class Settings(BaseSettings):
     # MCP Server
-    mcp_server_url: str = "http://localhost:8000"
+    mcp_backend: str = "postgresql"
+    postgresql_mcp_server_url: str = "http://localhost:8000"
 
     # LLM
     llm_provider: LLMProvider = LLMProvider.OPENAI

@@ -337,12 +337,82 @@ Output JSON:
 **Performance note:** This adds one LLM call. To limit latency, use a faster model
 (e.g., `gpt-4o-mini`) for this check, not the full generation model.
 
-### 3. MCP Client (`mcp/client.py`)
+### 3. MCP Client (`mcp_client/`)
 
-HTTP client that communicates with `postgresql-mcp-server` using the MCP protocol
-(JSON-RPC over HTTP/SSE).
+Layered client architecture enabling multi-database extensibility while
+providing a stable interface for agent nodes.
 
-Available MCP tools on the server:
+```
+┌──────────────────────────────────────────────────────────────┐
+│  BaseMCPClient (ABC)                                         │
+│  └─ Transport only: _call_tool(), health_check()             │
+│                                                              │
+│  BaseSQLMCPClient(BaseMCPClient) (ABC)                       │
+│  └─ Common SQL interface agent nodes program against:        │
+│     list_schemas(), list_tables(), get_table_schema(),       │
+│     get_constraints(), get_indexes(), dry_run_query(),       │
+│     execute_query(), explain_query()                         │
+│                                                              │
+│  PostgreSQLMCPClient(BaseSQLMCPClient)                       │
+│  └─ Concrete: maps interface → postgresql-mcp-server tools   │
+│     via FastMCP Client (Streamable HTTP transport)           │
+│                                                              │
+│  (Future) BigQueryMCPClient(BaseSQLMCPClient)                │
+│  └─ Maps interface → bq-mcp-server tools                     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Design rationale:** Agent workflow code depends only on `BaseSQLMCPClient`.
+Swapping databases requires only a new subclass + config change — no graph
+node modifications.
+
+**Multi-backend extensibility (registry pattern):**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  mcp_client_registry                                                │
+│                                                                     │
+│  "postgresql" → PostgreSQLMCPClient (FastMCP Streamable HTTP)       │
+│  "bigquery"   → BigQueryMCPClient   (future)                        │
+│  "mysql"      → MySQLMCPClient      (future)                        │
+│                                                                     │
+│  create_mcp_client(backend="postgresql")  ← factory function        │
+│  MCP_BACKEND env var selects default backend                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+New backends are registered via decorator — no if/else chains:
+```python
+@mcp_client_registry.register("bigquery")
+class BigQueryMCPClient(BaseSQLMCPClient):
+    ...
+```
+
+Retry logic (exponential backoff for transient failures) lives in `BaseMCPClient`,
+so all implementations inherit it automatically.
+
+**Future: Cross-database query support**
+
+When data spans multiple backends (e.g. OLTP in PostgreSQL + analytics in BigQuery):
+```
+User question
+     │
+     ▼
+route_backend → [postgresql, bigquery]
+     │
+     ├── PostgreSQL sub-query (via PostgreSQLMCPClient)
+     └── BigQuery sub-query (via BigQueryMCPClient)
+     │
+     ▼
+cross_db_merge (Python-level join on shared keys)
+     │
+     ▼
+combined result
+```
+
+Each sub-query respects its own MCP server's guardrails independently.
+Complex cross-db analytics may use a federated engine (Trino/Presto) instead.
+
+Available MCP tools on postgresql-mcp-server:
 
 | Tool | Purpose | Used by |
 |------|---------|---------|
@@ -357,10 +427,21 @@ Available MCP tools on the server:
 | `explain_query` | Execution plan | Future optimization |
 
 Client implementation:
-- Uses `httpx.AsyncClient` for HTTP transport
-- Supports MCP SSE transport (stdio not needed since server is remote)
+- Uses `fastmcp.Client` with Streamable HTTP transport
 - Connection pooling and retry with backoff
 - Timeout configuration
+- Structured error handling via `MCPError`
+
+File structure:
+```
+src/text2sql_agent/mcp_client/
+├── __init__.py
+├── base.py                  # BaseMCPClient (retry) + BaseSQLMCPClient (abstract)
+├── factory.py               # Registry + create_mcp_client()
+├── postgresql_client.py     # PostgreSQLMCPClient (concrete)
+└── (future) bigquery_client.py   # BigQueryMCPClient
+└── (future) pool.py              # MCPClientPool for multi-backend
+```
 
 ### 4. ChromaDB Vector Store (`rag/`)
 
@@ -463,7 +544,7 @@ default). This is insufficient for LLM to understand business semantics (e.g., w
          │                              │
          │  Table: customers            │
          │  Description: Bảng lưu       │
-         │    thông tin khách hàng...    │
+         │    thông tin khách hàng...   │
          │  Columns:                    │
          │  - id (bigint, PK) — Mã KH   │
          │  - full_name (varchar) —     │
@@ -471,7 +552,7 @@ default). This is insufficient for LLM to understand business semantics (e.g., w
          │  - balance (numeric) —       │
          │    Số dư tài khoản (VND)     │
          │  - status (varchar) —        │
-         │    active/suspended/closed    │
+         │    active/suspended/closed   │
          └──────────────────────────────┘
 ```
 
