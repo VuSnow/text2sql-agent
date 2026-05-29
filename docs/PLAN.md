@@ -60,88 +60,41 @@ BaseMCPClient (transport: _call_tool, health_check)
 
 ## Phase 3: LLM Provider Abstraction
 
-**Goal:** OpenAI LLM client (GPT-4o) + prompt templates.
+**Goal:** OpenAI LLM client (GPT-4o) + classification prompt.
 
 | Task | Description | Files |
 |------|-------------|-------|
 | 3.1 | Implement provider factory using LangChain chat models | `src/text2sql_agent/llm/provider.py` |
-| 3.2 | Prompt templates: classification, SQL generation (policy-aware), repair | `src/text2sql_agent/llm/prompts.py` |
+| 3.2 | Classification prompt (decision+flags schema, production-safe) | `src/text2sql_agent/llm/prompts/classification.py` |
 | 3.3 | Unit tests for provider instantiation | `tests/unit/test_llm_provider.py` |
 
-**Prompts to implement:**
+**Prompt strategy:** One prompt per agent node. Each prompt is created and refined
+when its corresponding node is implemented. No upfront drafts.
 
-**A. Classification prompt:**
+**Classification prompt schema (implemented):**
 ```
-Classify this user request. Output structured JSON.
-- request_type: data_query | explanation | unsafe | unsupported | ambiguous
-- requires_sql: bool
-- risk_level: low | medium | high
-- reason: brief explanation
-- safe_to_continue: bool
-
-UNSAFE examples: DELETE, DROP, INSERT, UPDATE, anything destructive
-UNSUPPORTED examples: questions about non-data topics, requests for code generation
-AMBIGUOUS examples: too vague to determine intent, missing key criteria
-```
-
-**B. Clarification prompt (NEW):**
-```
-The user's question is ambiguous. Based on the available schema, generate 1–3
-short, specific clarifying questions that would resolve the ambiguity.
-
-User question: {question}
-Ambiguity reason: {classification.reason}
-Available tables: {table_summaries}
-
-Rules:
-- Questions must be answerable in one sentence
-- Focus on: metric choice, time range, entity scope, sorting criteria
-- Maximum 3 questions
-- Do not reveal internal schema details to user
+Output:
+{
+  "request_type": "data_query" | "explanation" | "unsafe" | "unsupported" | "ambiguous",
+  "decision": "continue" | "clarify" | "block" | "explain",
+  "requires_sql": true | false,
+  "flags": {
+    "is_destructive", "is_raw_sql", "is_prompt_injection",
+    "is_broad_export", "needs_clarification", "is_multi_intent"
+  },
+  "block_reason": null | "destructive_operation" | "prompt_injection" | "unsupported" | "raw_sql" | "multi_intent_with_unsafe",
+  "reason": "brief explanation"
+}
 ```
 
-**C. SQL generation prompt (policy-aware):**
-```
-RULES (strictly enforced):
-- Only SELECT statements
-- Never use SELECT * — always specify columns
-- Always include LIMIT (max 100 unless user specifies)
-- Only use these tables: {candidate_tables}
-- Only use columns from the schema below
-- No subqueries deeper than 2 levels
-- No more than 3 JOINs
-```
-
-**D. Semantic check prompt (NEW):**
-```
-Review this SQL query for semantic correctness given the user's intent.
-
-User question: {question}
-Generated SQL: {generated_sql}
-Schema: {schema_context}
-
-Check for:
-1. Are JOINs on correct keys with correct cardinality?
-2. Is GROUP BY complete (no missing non-aggregated columns)?
-3. Are date filters interpreting the user's time reference correctly?
-4. Is there double-counting risk from 1:N joins with aggregation?
-5. Is LIMIT applied at the right level?
-6. Does the SQL answer what the user actually asked?
-
-Output JSON: {passed, issues, severity, suggestion}
-```
-
-**E. Repair prompt:**
-```
-The SQL failed validation. Fix it following the same rules.
-Original SQL: {sql}
-Error: {error_message}
-Error type: {error_type}
-Do NOT attempt to access different tables or columns to work around policy.
-```
+**Remaining prompts (created alongside their nodes in Phase 5):**
+- Clarification prompt → Phase 5.3 (`clarify_question` node)
+- SQL generation prompt → Phase 5.7 (`generate_sql` node)
+- Semantic check prompt → Phase 5.9 (`semantic_check_sql` node)
+- Repair prompt → Phase 5.10 (`repair_sql` node)
 
 **Dependencies:** Phase 1
-**Exit criteria:** Can instantiate any provider and get structured responses.
+**Exit criteria:** Can instantiate LLM provider. Classification prompt tested with .format().
 
 ---
 
@@ -270,15 +223,15 @@ Idempotent. Safe to re-run.
 | Task | Description | Files |
 |------|-------------|-------|
 | 5.1 | Define `AgentState` TypedDict (full state incl. classification, clarification, scope, semantic check) | `src/text2sql_agent/agent/state.py` |
-| 5.2 | `classify_request` node — LLM structured output for intent classification | `src/text2sql_agent/agent/nodes/classify.py` |
-| 5.3 | `clarify_question` node — generate clarifying questions for ambiguous input | `src/text2sql_agent/agent/nodes/clarify.py` |
+| 5.2 | `classify_request` node — LLM structured output for intent classification (prompt: Phase 3) | `src/text2sql_agent/agent/nodes/classify.py` |
+| 5.3 | `clarify_question` node + clarification prompt | `src/text2sql_agent/agent/nodes/clarify.py`, `src/text2sql_agent/llm/prompts/clarification.py` |
 | 5.4 | `select_schema_scope` node — semantic search in `schema_descriptions` + allowlist filter → candidate tables | `src/text2sql_agent/agent/nodes/scope.py` |
 | 5.5 | `retrieve_schema` node — calls MCP for candidate tables + enriches with NL descriptions | `src/text2sql_agent/agent/nodes/schema.py` |
 | 5.6 | `retrieve_examples` node — queries ChromaDB filtered by candidate tables | `src/text2sql_agent/agent/nodes/rag.py` |
-| 5.7 | `generate_sql` node — policy-aware LLM prompt | `src/text2sql_agent/agent/nodes/generate.py` |
+| 5.7 | `generate_sql` node + SQL generation prompt (policy-aware) | `src/text2sql_agent/agent/nodes/generate.py`, `src/text2sql_agent/llm/prompts/generation.py` |
 | 5.8 | `validate_sql` node — MCP `dry_run_query` + error classification | `src/text2sql_agent/agent/nodes/validate.py` |
-| 5.9 | `semantic_check_sql` node — LLM-based semantic correctness check | `src/text2sql_agent/agent/nodes/semantic_check.py` |
-| 5.10 | `repair_sql` node — LLM repair (abort if policy_violation) | `src/text2sql_agent/agent/nodes/repair.py` |
+| 5.9 | `semantic_check_sql` node + semantic check prompt | `src/text2sql_agent/agent/nodes/semantic_check.py`, `src/text2sql_agent/llm/prompts/semantic_check.py` |
+| 5.10 | `repair_sql` node + repair prompt | `src/text2sql_agent/agent/nodes/repair.py`, `src/text2sql_agent/llm/prompts/repair.py` |
 | 5.11 | `maybe_execute` node — execute only if `execute=true` | `src/text2sql_agent/agent/nodes/execute.py` |
 | 5.12 | Unit tests for each node | `tests/unit/test_nodes.py` |
 
@@ -365,11 +318,14 @@ Idempotent. Safe to re-run.
 ```python
 def route_after_classify(state):
     classification = state["classification"]
-    if classification["request_type"] in ("unsafe", "unsupported"):
+    decision = classification["decision"]
+    if decision == "block":
         return "reject"
-    if classification["request_type"] == "ambiguous":
+    if decision == "clarify":
         return "clarify_question"
-    return "select_schema_scope"
+    if decision == "explain":
+        return "explain_schema"
+    return "select_schema_scope"  # decision == "continue"
 
 def route_after_validate(state):
     result = state["validation_result"]

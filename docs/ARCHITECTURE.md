@@ -143,10 +143,19 @@ Stateful workflow orchestrating the text-to-SQL pipeline with safety gates.
 ```python
 class Classification(TypedDict):
     request_type: str       # data_query | explanation | unsafe | unsupported | ambiguous
+    decision: str           # continue | clarify | block | explain
     requires_sql: bool
-    risk_level: str         # low | medium | high
+    flags: ClassificationFlags
+    block_reason: str | None  # destructive_operation | prompt_injection | unsupported | raw_sql | multi_intent_with_unsafe
     reason: str
-    safe_to_continue: bool
+
+class ClassificationFlags(TypedDict):
+    is_destructive: bool
+    is_raw_sql: bool
+    is_prompt_injection: bool
+    is_broad_export: bool
+    needs_clarification: bool
+    is_multi_intent: bool
 
 class ValidationResult(TypedDict):
     valid: bool
@@ -201,11 +210,13 @@ START
   ▼
 classify_request
   │
-  ├── unsafe/unsupported ──▶ END (rejection reason)
+  ├── decision=block ──▶ END (rejection reason)
   │
-  ├── ambiguous ──▶ clarify_question ──▶ END (needs_clarification)
+  ├── decision=clarify ──▶ clarify_question ──▶ END (needs_clarification)
   │
-  ▼
+  ├── decision=explain ──▶ explain_schema ──▶ END (explanation)
+  │
+  ▼ decision=continue
 select_schema_scope
   │
   ▼
@@ -237,8 +248,8 @@ maybe_execute ──▶ END (success)
 
 | Node | Purpose | External Call | Abort Condition |
 |------|---------|---------------|-----------------|
-| `classify_request` | Determine if question is safe/supported | LLM API | unsafe, unsupported |
-| `clarify_question` | Generate clarifying questions for ambiguous input | LLM API | — (returns questions to user) |
+| `classify_request` | Determine if question is safe/supported | LLM API | decision=block |
+| `clarify_question` | Generate clarifying questions for ambiguous/broad input | LLM API | — (returns questions to user) |
 | `select_schema_scope` | Pick candidate tables via semantic search | ChromaDB: `schema_descriptions` collection | No candidate tables found |
 | `retrieve_schema` | Fetch exact schema + enrich with NL descriptions | MCP: `get_table_schema`, `get_constraints` + `schema_descriptions` lookup | — |
 | `retrieve_examples` | Find similar SQL examples (scoped) | ChromaDB: `sql_examples` collection (filtered) | — |
@@ -250,8 +261,9 @@ maybe_execute ──▶ END (success)
 
 #### Node Detail: `clarify_question`
 
-Triggered when `classify_request` returns `request_type: "ambiguous"`. Instead of
-rejecting, the agent generates targeted clarifying questions.
+Triggered when `classify_request` returns `decision: "clarify"`. This covers
+both ambiguous requests and broad export requests that need narrowing. Instead
+of rejecting, the agent generates targeted clarifying questions.
 
 **Input:** `question`, `classification.reason`, available schema context (table names + descriptions)
 
