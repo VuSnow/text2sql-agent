@@ -1,0 +1,93 @@
+services:
+  # ─── PostgreSQL Database ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-banking_mcp}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/sql/all_in_one.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── PostgreSQL MCP Server ─────────────────────────────────────────────────
+  mcp-server:
+    build:
+      context: ../postgresql-mcp-server
+      dockerfile: Dockerfile
+    environment:
+      POSTGRESQL_CONNECTION_STRING: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-banking_mcp}"
+      SECURITY_PROFILE: ${SECURITY_PROFILE:-general}
+      READ_ONLY: "true"
+      ENABLE_WRITE_TOOLS: "false"
+      DEFAULT_LIMIT: "100"
+      MAX_LIMIT: "1000"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    command: ["--transport", "streamable-http", "--port", "8000", "--host", "0.0.0.0"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from postgresql_mcp.server import connection_manager; print('ok')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ─── Text2SQL Agent ─────────────────────────────────────────────────────────
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # MCP Server (points to internal Docker network)
+      POSTGRESQL_MCP_SERVER_URL: "http://mcp-server:8000/mcp"
+      MCP_BACKEND: postgresql
+
+      # LLM (OpenAI)
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_TEMPERATURE: "0.0"
+
+      # Embedding (Bedrock)
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-bedrock}
+      EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID:-amazon.titan-embed-text-v2:0}
+      EMBEDDING_DIMENSIONS: "1024"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+
+      # RAG
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      RAG_TOP_K: "10"
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+
+      # Agent
+      MAX_REPAIR_ATTEMPTS: "3"
+      DEFAULT_EXECUTE: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8080:8080"
+    volumes:
+      - chroma_data:/app/data/chroma
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  chroma_data:

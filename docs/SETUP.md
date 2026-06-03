@@ -307,6 +307,84 @@ python tests/manual/test_agent_advanced.py --base-url http://127.0.0.1:8080
 
 ---
 
+## Docker Deployment
+
+As an alternative to running services manually, you can use Docker to bring up the entire stack with a single command.
+
+### Option A: Docker Compose (full stack)
+
+Starts PostgreSQL + MCP server + text2sql-agent together:
+
+```bash
+cd /home/dungvu/workspace/code/github/text2sql-agent
+
+# Set required credentials in .env:
+#   LLM_API_KEY=<your-openai-key>
+#   AWS_ACCESS_KEY_ID=<your-aws-access-key>
+#   AWS_SECRET_ACCESS_KEY=<your-aws-secret-key>
+
+# Build and start all services
+docker compose up --build
+```
+
+Services will start in order:
+1. `postgres` (port 5432) — auto-seeds schema from `data/sql/all_in_one.sql`
+2. `mcp-server` (port 8000) — waits for postgres to be healthy
+3. `agent` (port 8080) — waits for mcp-server to be healthy
+
+Stop everything:
+```bash
+docker compose down
+```
+
+Remove volumes (reset database + ChromaDB):
+```bash
+docker compose down -v
+```
+
+### Option B: Standalone agent image
+
+If MCP server and PostgreSQL are already running elsewhere:
+
+```bash
+# Build
+docker build -t text2sql-agent .
+
+# Run (pass env vars for external services)
+docker run -p 8080:8080 \
+  -e POSTGRESQL_MCP_SERVER_URL=http://host.docker.internal:8000/mcp \
+  -e LLM_API_KEY=<your-openai-key> \
+  -e AWS_ACCESS_KEY_ID=<your-aws-access-key> \
+  -e AWS_SECRET_ACCESS_KEY=<your-aws-secret-key> \
+  -e AWS_REGION=us-east-1 \
+  -e EMBEDDING_PROVIDER=bedrock \
+  text2sql-agent
+```
+
+### Seed RAG in Docker
+
+On first run, seed ChromaDB inside the container:
+
+```bash
+docker compose exec agent python -m text2sql_agent.rag.seed
+```
+
+### Docker environment variables
+
+In Docker, AWS credentials are passed via env vars (not profile file):
+
+| Variable | Description |
+|----------|-------------|
+| `LLM_API_KEY` | OpenAI API key |
+| `AWS_ACCESS_KEY_ID` | AWS access key for Bedrock |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key for Bedrock |
+| `AWS_REGION` | AWS region (default: `us-east-1`) |
+| `POSTGRES_USER` | DB user (default: `postgres`) |
+| `POSTGRES_PASSWORD` | DB password (default: `postgres`) |
+| `POSTGRES_DB` | DB name (default: `banking_mcp`) |
+
+---
+
 ## Troubleshooting
 
 | Issue | Fix |
