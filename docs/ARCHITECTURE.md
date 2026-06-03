@@ -61,6 +61,11 @@ not duplicated logic.
          └──────────────────┘
 ```
 
+**Provider model:**
+- **OpenAI GPT-4o-mini** — LLM for generation, classification, repair, semantic check
+- **AWS Bedrock Titan** — Text embeddings (1024-dim) for ChromaDB
+- **AWS Bedrock Cohere** — Optional reranker for RAG results
+
 ## Security Boundary Model
 
 ```
@@ -449,10 +454,10 @@ File structure:
 src/text2sql_agent/mcp_client/
 ├── __init__.py
 ├── base.py                  # BaseMCPClient (retry) + BaseSQLMCPClient (abstract)
+├── models.py                # Response data models (TableSchema, ColumnInfo, etc.)
 ├── factory.py               # Registry + create_mcp_client()
 ├── postgresql_client.py     # PostgreSQLMCPClient (concrete)
 └── (future) bigquery_client.py   # BigQueryMCPClient
-└── (future) pool.py              # MCPClientPool for multi-backend
 ```
 
 ### 4. ChromaDB Vector Store (`rag/`)
@@ -632,38 +637,54 @@ Single script that populates both collections at startup:
 ```
 python -m text2sql_agent.rag.seed
 
-  ┌─────────────────────────────────┐
-  │  Load data/schema/tables.yaml   │
-  │  → concat table + column descs  │
-  │  → embed                        │
-  │  → upsert: schema_descriptions  │
-  └─────────────────────────────────┘
+  ┌──────────────────────────────────────┐
+  │  Load data/docs/*.md                 │
+  │  → parse table descriptions          │
+  │  → embed via Bedrock Titan           │
+  │  → upsert: schema_descriptions       │
+  └──────────────────────────────────────┘
               +
-  ┌─────────────────────────────────┐
-  │  Load data/examples/*.yaml      │
-  │  → embed NL questions           │
-  │  → upsert: sql_examples         │
-  └─────────────────────────────────┘
+  ┌──────────────────────────────────────┐
+  │  Load data/examples/*.md             │
+  │  → parse NL question + SQL pairs     │
+  │  → embed NL questions via Bedrock    │
+  │  → upsert: sql_examples             │
+  └──────────────────────────────────────┘
 ```
 
-- Idempotent (deterministic IDs based on table name / question hash)
+- Idempotent (deterministic IDs based on content hash)
 - Runs at container startup or manually
-- When tables change → update `data/schema/tables.yaml` → re-seed
+- When tables change → update `data/docs/` markdown files → re-seed
+
+**Embedding provider:** AWS Bedrock Titan Embed V2 (`amazon.titan-embed-text-v2:0`, 1024 dims).
+Optional reranking via Cohere Rerank v3.5 on Bedrock (`RERANKER_ENABLED=true`).
 
 ### 5. LLM Provider (`llm/provider.py`)
 
-OpenAI LLM client using LangChain's chat model interface.
+Dual-provider setup using LangChain's chat model interface:
+
+- **OpenAI** (generation, classification, semantic check, repair)
+- **AWS Bedrock** (embeddings via Titan, optional reranking via Cohere)
 
 ```python
-def get_llm(model: str, api_key: str, temperature: float) -> BaseChatModel:
-    return ChatOpenAI(model=model, api_key=api_key, temperature=temperature)
+def get_llm(provider=None, model=None, temperature=None) -> BaseChatModel:
+    # Returns ChatOpenAI or ChatBedrockConverse based on config
 ```
 
 Used in four nodes:
 - `classify_request`: Structured output for intent classification
 - `generate_sql`: System prompt with schema + examples + policy → generate SQL
-- `semantic_check_sql`: Validate semantic correctness (can use faster model)
+- `semantic_check_sql`: Validate semantic correctness
 - `repair_sql`: System prompt with error + original SQL → fix SQL
+
+Embedding (`rag/embeddings.py`):
+- AWS Bedrock Titan Embed V2 (`amazon.titan-embed-text-v2:0`)
+- 1024 dimensions, normalized vectors
+- Authenticated via AWS profile (`boto3.Session`)
+
+Reranker (`rag/reranker.py`, optional):
+- AWS Bedrock Cohere Rerank v3.5
+- Enabled via `RERANKER_ENABLED=true`
 
 #### Policy-Aware SQL Generation Prompt
 
@@ -693,33 +714,53 @@ USER QUESTION: {question}
 
 ### 6. Configuration (`config.py`)
 
-Pydantic Settings loading from `.env`:
+Pydantic Settings with `Field(alias="ENV_VAR")` pattern, auto-loading from `.env`:
 
 ```python
 class Settings(BaseSettings):
     # MCP Server
-    mcp_server_url: str = "http://localhost:8000"
+    mcp_backend: str                          # MCP_BACKEND (postgresql)
+    postgresql_mcp_server_url: str            # POSTGRESQL_MCP_SERVER_URL
 
-    # LLM
-    llm_provider: LLMProvider  # openai
-    llm_model: str = "gpt-4o"
-    llm_api_key: str = ""
-    llm_temperature: float = 0.0
+    # LLM (OpenAI for generation)
+    llm_provider: LLMProvider                 # LLM_PROVIDER (openai | bedrock)
+    llm_model: str                            # LLM_MODEL (gpt-4o-mini)
+    llm_api_key: str                          # LLM_API_KEY
+    llm_temperature: float                    # LLM_TEMPERATURE (0.0)
+
+    # AWS Bedrock (for embedding & reranker)
+    aws_region: str                           # AWS_REGION (us-east-1)
+    aws_profile: str | None                   # AWS_PROFILE (btc-bedrock)
+
+    # Embedding (Bedrock)
+    embedding_provider: EmbeddingProvider     # EMBEDDING_PROVIDER (bedrock | openai)
+    embedding_model_id: str                   # EMBEDDING_MODEL_ID
+    embedding_dimensions: int                 # EMBEDDING_DIMENSIONS (1024)
+
+    # Reranker
+    reranker_enabled: bool                    # RERANKER_ENABLED (false)
+    reranker_model_id: str                    # RERANKER_MODEL_ID
+    reranker_top_k: int                       # RERANKER_TOP_K (5)
 
     # RAG / ChromaDB
-    chroma_persist_dir: Path = Path("./data/chroma")
-    rag_top_k: int = 5
+    chroma_persist_dir: Path                  # CHROMA_PERSIST_DIR (./data/chroma)
+    rag_top_k: int                            # RAG_TOP_K (10)
 
     # Agent behavior
-    max_repair_attempts: int = 3
-    default_execute: bool = False  # Preview by default
+    max_repair_attempts: int                  # MAX_REPAIR_ATTEMPTS (3)
+    default_execute: bool                     # DEFAULT_EXECUTE (false)
 
     # Schema scope
-    table_allowlist: list[str] = []  # Empty = all tables from MCP
-    schema_name: str = "public"
+    table_allowlist: list[str]                # TABLE_ALLOWLIST (empty = all)
+    schema_name: str                          # SCHEMA_NAME (public)
 
     # Logging
-    log_level: str = "INFO"
+    log_level: str                            # LOG_LEVEL (INFO)
+
+    model_config = SettingsConfigDict(
+        env_file=ROOT_DIR / ".env",
+        populate_by_name=True,
+    )
 ```
 
 ## Data Flow (Happy Path — Preview Mode)

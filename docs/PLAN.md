@@ -3,10 +3,10 @@
 ## Overview
 
 Phase-by-phase implementation of `text2sql-agent` — a **production-safe**
-PostgreSQL Text2SQL agent using LangGraph, MCP protocol, ChromaDB RAG, and
-OpenAI GPT.
+PostgreSQL Text2SQL agent using LangGraph, MCP protocol, ChromaDB RAG,
+OpenAI GPT (generation), and AWS Bedrock (embeddings).
 
-**Target stack:** Python 3.11+, FastAPI, LangGraph, ChromaDB, httpx
+**Target stack:** Python 3.12+, FastAPI, LangGraph, ChromaDB, Bedrock Titan embeddings, OpenAI GPT-4o-mini
 
 **Design stance:** Production-safe skeleton from Phase 1. Safety gates
 (classification, scope, policy-aware generation, error classification) are
@@ -15,25 +15,26 @@ built into the foundation, not bolted on later. Implementation stays minimal
 
 ---
 
-## Phase 1: Project Foundation
+## Phase 1: Project Foundation ✅
 
 **Goal:** Runnable project skeleton with configuration, policy config, and health endpoint.
 
 | Task | Description | Files |
 |------|-------------|-------|
 | 1.1 | Create `pyproject.toml` with all dependencies | `pyproject.toml` |
-| 1.2 | Create `.env.example` with all config vars | `.env.example` |
+| 1.2 | Create `.env` template with all config vars | `.env` |
 | 1.3 | Create `.gitignore` | `.gitignore` |
-| 1.4 | Implement `config.py` with Pydantic Settings (incl. `table_allowlist`, `default_execute=false`) | `src/text2sql_agent/config.py` |
+| 1.4 | Implement `config.py` with Pydantic Settings (Field aliases, SettingsConfigDict, dual provider support) | `src/text2sql_agent/config.py` |
 | 1.5 | Create FastAPI app with `/health` endpoint | `src/text2sql_agent/main.py` |
 | 1.6 | Verify: `uvicorn text2sql_agent.main:app` starts | — |
 
 **Dependencies:** None
 **Exit criteria:** Server starts, `/health` returns 200. Config loads with policy fields.
+**Status:** Complete
 
 ---
 
-## Phase 2: MCP Client
+## Phase 2: MCP Client ✅
 
 **Goal:** Layered async MCP client with stable SQL interface for agent nodes.
 
@@ -55,12 +56,13 @@ BaseMCPClient (transport: _call_tool, health_check)
 
 **Dependencies:** Phase 1, running `postgresql-mcp-server`
 **Exit criteria:** Can call MCP tools and get schema info from a test database. Agent nodes depend only on `BaseSQLMCPClient`.
+**Status:** Complete
 
 ---
 
-## Phase 3: LLM Provider Abstraction
+## Phase 3: LLM Provider Abstraction ✅
 
-**Goal:** OpenAI LLM client (GPT-4o) + classification prompt.
+**Goal:** LLM client (OpenAI GPT + Bedrock) + classification prompt.
 
 | Task | Description | Files |
 |------|-------------|-------|
@@ -89,20 +91,20 @@ Output:
 
 ---
 
-## Phase 4: RAG — Vector Store & Seeding
+## Phase 4: RAG — Vector Store & Seeding ✅
 
-**Goal:** ChromaDB with 2 collections: `schema_descriptions` (table selection) and `sql_examples` (SQL RAG). Both seeded from YAML.
+**Goal:** ChromaDB with 2 collections: `schema_descriptions` (table selection) and `sql_examples` (SQL RAG). Seeded from markdown docs.
 
 | Task | Description | Files |
 |------|-------------|-------|
 | 4.1 | ChromaDB store wrapper with 2 collections (schema + examples) | `src/text2sql_agent/rag/store.py` |
-| 4.2 | Schema YAML format: table name, description, columns with types + NL descriptions | `data/schema/tables.yaml` |
-| 4.3 | Create schema descriptions for banking domain tables | `data/schema/tables.yaml` |
-| 4.4 | Example YAML format definition | `data/examples/README.md` |
-| 4.5 | Create 20–30 seed SQL examples (various complexity) | `data/examples/banking.yaml` |
-| 4.6 | Seed script: loads both YAML sources → embeds → upserts into both collections | `src/text2sql_agent/rag/seed.py` |
-| 4.7 | Unit tests: schema search by NL question returns correct tables | `tests/unit/test_rag_store.py` |
-| 4.8 | Unit tests: example search with table filter returns scoped results | same |
+| 4.2 | Bedrock Titan embedding client | `src/text2sql_agent/rag/embeddings.py` |
+| 4.3 | Optional Cohere reranker | `src/text2sql_agent/rag/reranker.py` |
+| 4.4 | Create schema descriptions for banking domain tables | `data/docs/*.md` |
+| 4.5 | Create 100 seed SQL examples (various complexity) | `data/examples/*.md` |
+| 4.6 | Seed script: loads markdown sources → embeds via Bedrock → upserts into both collections | `src/text2sql_agent/rag/seed.py` |
+| 4.7 | Integration tests: schema search by NL question returns correct tables | `tests/integration/test_rag_search.py` |
+| 4.8 | Integration tests: RAG accuracy measurement | `tests/integration/test_rag_accuracy.py` |
 
 **Collection 1: `schema_descriptions`** (for `select_schema_scope` node):
 
@@ -207,7 +209,7 @@ Idempotent. Safe to re-run.
 
 ---
 
-## Phase 5: LangGraph Agent — Core Nodes
+## Phase 5: LangGraph Agent — Core Nodes ✅
 
 **Goal:** All nodes implemented with safety gates, testable in isolation.
 
@@ -287,7 +289,7 @@ Idempotent. Safe to re-run.
 
 ---
 
-## Phase 6: LangGraph Agent — Graph Assembly
+## Phase 6: LangGraph Agent — Graph Assembly ✅
 
 **Goal:** Complete agent workflow with conditional routing and safety gates.
 
@@ -343,7 +345,7 @@ def route_after_semantic_check(state):
 
 ---
 
-## Phase 7: FastAPI Endpoints
+## Phase 7: FastAPI Endpoints ✅
 
 **Goal:** REST API with preview/execute separation.
 

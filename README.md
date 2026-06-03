@@ -3,7 +3,11 @@
 Text2SQL agent that converts natural language questions into PostgreSQL queries.
 Built with LangGraph for agentic workflow, connects to `postgresql-mcp-server`
 via MCP protocol for schema exploration and query validation, uses ChromaDB for
-RAG-based SQL example retrieval, powered by OpenAI GPT models.
+RAG-based SQL example retrieval.
+
+- **LLM:** OpenAI GPT (generation) + AWS Bedrock Titan (embeddings)
+- **Transport:** FastMCP Streamable HTTP
+- **Vector Store:** ChromaDB with Bedrock embeddings + optional Cohere reranker
 
 ## Architecture
 
@@ -13,6 +17,7 @@ User Question (natural language)
      ▼
 ┌─────────────────┐
 │  FastAPI Server │  POST /query/preview, /query/execute, /query/stream
+│  (port 8080)    │
 └────────┬────────┘
          │
          ▼
@@ -25,7 +30,7 @@ User Question (natural language)
 │    ▼                                                       │
 │  select_schema_scope (ChromaDB: schema_descriptions)       │
 │    ▼                                                       │
-│  retrieve_schema (MCP + NL enrichment from YAML)           │
+│  retrieve_schema (MCP + NL enrichment from docs)           │
 │    ▼                                                       │
 │  retrieve_examples (ChromaDB: sql_examples, scoped)        │
 │    ▼                                                       │
@@ -43,13 +48,14 @@ User Question (natural language)
          ▼                     ▼                ▼
 ┌─────────────────┐   ┌──────────────┐  ┌───────────────────────┐
 │ OpenAI API      │   │   ChromaDB   │  │ postgresql-mcp-server │
-│ (GPT-4o)        │   │  (embedded)  │  │ (schema, dry_run,     │
-│                 │   │              │  │  execute, policy)     │
+│ (GPT-4o-mini)   │   │  + Bedrock   │  │ (schema, dry_run,     │
+│                 │   │  embeddings  │  │  execute, policy)     │
 └─────────────────┘   └──────────────┘  └───────────────────────┘
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design.
 See [docs/PLAN.md](docs/PLAN.md) for implementation plan.
+See [docs/SETUP.md](docs/SETUP.md) for step-by-step setup & run guide.
 
 ## Features
 
@@ -57,13 +63,12 @@ See [docs/PLAN.md](docs/PLAN.md) for implementation plan.
 - **Clarification Flow** — asks targeted questions for ambiguous input instead of guessing
 - **MCP Integration** — connects to `postgresql-mcp-server` for schema exploration and query validation/execution
 - **Schema Enrichment** — merges raw MCP schema with business-level NL descriptions
-- **OpenAI GPT** — powered by GPT-4o (configurable model via env)
-- **RAG Pipeline** — vector similarity search over curated SQL examples using ChromaDB
+- **Dual Provider** — OpenAI GPT for generation, AWS Bedrock Titan for embeddings
+- **RAG Pipeline** — vector similarity search over curated SQL examples using ChromaDB + optional reranking
 - **Self-Repair Loop** — validates SQL via `dry_run_query`, auto-fixes errors up to N retries
 - **Semantic Validation** — LLM-based check for join correctness, aggregation logic, date filters
 - **Preview by Default** — returns SQL without executing unless explicitly requested
 - **Hard Security Boundary** — MCP server enforces AST validation, column policy, PII masking
-- **Evaluation Framework** — automated accuracy measurement and regression detection
 - **FastAPI Server** — REST API with streaming support for real-time responses
 
 ## Quick Start
@@ -74,32 +79,33 @@ pip install -e ".[dev]"
 
 # Configure
 cp .env.example .env
-# Edit .env with your LLM API key and MCP server URL
+# Edit .env: set LLM_API_KEY, AWS_PROFILE, POSTGRESQL_MCP_SERVER_URL
 
-# Ensure postgresql-mcp-server is running
-# See: https://github.com/your-org/postgresql-mcp-server
-
-# Seed SQL examples into ChromaDB
+# Seed RAG data into ChromaDB
 python -m text2sql_agent.rag.seed
 
-# Run
-uvicorn text2sql_agent.main:app --reload --port 8001
-
-# Or with Docker
-docker compose up
+# Run (requires postgresql-mcp-server on port 8000)
+uvicorn text2sql_agent.main:app --host 0.0.0.0 --port 8080 --reload
 ```
+
+For full setup including database and MCP server, see [docs/SETUP.md](docs/SETUP.md).
 
 ## Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MCP_SERVER_URL` | postgresql-mcp-server endpoint | `http://localhost:8000` |
-| `LLM_PROVIDER` | `openai` | `openai` |
-| `LLM_MODEL` | OpenAI model name | `gpt-4o` |
+| `POSTGRESQL_MCP_SERVER_URL` | MCP server endpoint | `http://localhost:8000/mcp` |
+| `LLM_PROVIDER` | LLM provider (`openai` or `bedrock`) | `openai` |
+| `LLM_MODEL` | Model name | `gpt-4o-mini` |
 | `LLM_API_KEY` | OpenAI API key | — |
+| `EMBEDDING_PROVIDER` | Embedding provider (`bedrock` or `openai`) | `bedrock` |
+| `EMBEDDING_MODEL_ID` | Embedding model | `amazon.titan-embed-text-v2:0` |
+| `AWS_REGION` | AWS region for Bedrock | `us-east-1` |
+| `AWS_PROFILE` | AWS credentials profile | `btc-bedrock` |
 | `CHROMA_PERSIST_DIR` | ChromaDB storage path | `./data/chroma` |
+| `RERANKER_ENABLED` | Enable Cohere reranker | `false` |
 | `MAX_REPAIR_ATTEMPTS` | SQL repair retry limit | `3` |
-| `RAG_TOP_K` | Number of similar examples to retrieve | `5` |
+| `RAG_TOP_K` | Number of similar examples to retrieve | `10` |
 | `TABLE_ALLOWLIST` | Comma-separated allowed tables (empty = all) | — |
 | `DEFAULT_EXECUTE` | Execute queries by default | `false` |
 | `LOG_LEVEL` | Logging level | `INFO` |
@@ -108,92 +114,86 @@ docker compose up
 
 ```
 src/text2sql_agent/
-├── main.py           # FastAPI app entry point + logger
-├── config.py         # Pydantic Settings & env config
-├── agent/            # LangGraph workflow
-│   ├── graph.py      # Agent graph definition
-│   ├── state.py      # Agent state schema
-│   └── nodes/        # Individual workflow nodes
-│       ├── classify.py       # Intent classification
-│       ├── clarify.py        # Clarification question generation
-│       ├── scope.py          # Schema scope selection
-│       ├── schema.py         # Schema retrieval + enrichment
-│       ├── rag.py            # SQL example retrieval
-│       ├── generate.py       # SQL generation via LLM
-│       ├── validate.py       # Validation via MCP dry_run
-│       ├── semantic_check.py # Semantic correctness check
-│       ├── repair.py         # SQL repair via LLM
-│       └── execute.py        # Conditional execution
-├── mcp_client/       # MCP client connector (layered)
-│   ├── base.py       # BaseMCPClient (transport) + BaseSQLMCPClient (SQL interface)
-│   └── postgresql_client.py  # PostgreSQLMCPClient (FastMCP Streamable HTTP)
-├── rag/              # Vector store & embedding
-│   ├── store.py      # ChromaDB operations (2 collections)
-│   └── seed.py       # Seed schema + examples into vector store
-├── llm/              # LLM provider (OpenAI)
-│   ├── provider.py
-│   └── prompts.py    # All prompt templates
-├── eval/             # Evaluation framework
-│   ├── runner.py     # Eval runner
-│   ├── sql_compare.py # SQL equivalence checker
-│   └── metrics.py    # Metrics computation
-└── models.py         # Request/response Pydantic models
+├── main.py                # FastAPI app entry point
+├── config.py              # Pydantic Settings (env-based config)
+├── models.py              # Request/response Pydantic models
+├── policy.py              # Policy enforcement logic
+├── agent/                 # LangGraph workflow
+│   ├── graph.py           # Agent graph definition
+│   ├── state.py           # Agent state schema
+│   └── nodes/             # Individual workflow nodes
+│       ├── classify.py        # Intent classification
+│       ├── clarify.py         # Clarification question generation
+│       ├── scope.py           # Schema scope selection
+│       ├── schema.py          # Schema retrieval + enrichment
+│       ├── rag.py             # SQL example retrieval
+│       ├── generate.py        # SQL generation via LLM
+│       ├── validate.py        # Validation via MCP dry_run
+│       ├── semantic_check.py  # Semantic correctness check
+│       ├── repair.py          # SQL repair via LLM
+│       └── execute.py         # Conditional execution
+├── mcp_client/            # MCP client connector (layered)
+│   ├── base.py            # BaseMCPClient + BaseSQLMCPClient
+│   ├── factory.py         # Registry-based client factory
+│   ├── models.py          # MCP response models
+│   └── postgresql_client.py  # PostgreSQL MCP client (Streamable HTTP)
+├── rag/                   # Vector store & embedding
+│   ├── embeddings.py      # Bedrock Titan embedding client
+│   ├── reranker.py        # Bedrock Cohere reranker
+│   ├── store.py           # ChromaDB operations (2 collections)
+│   └── seed.py            # Seed schema + examples into vector store
+└── llm/                   # LLM provider
+    ├── provider.py        # Provider factory (OpenAI / Bedrock)
+    └── prompts/           # Prompt templates
+        ├── classification.py
+        ├── clarification.py
+        ├── generation.py
+        ├── repair.py
+        └── semantic_check.py
 
 data/
-├── schema/           # Table descriptions (YAML)
-│   └── tables.yaml
-├── examples/         # Curated SQL examples (YAML)
-│   └── banking.yaml
-└── eval/             # Evaluation dataset
-    └── banking_eval.yaml
+├── docs/              # Table descriptions (markdown, for RAG seeding)
+├── examples/          # Curated SQL examples (markdown, for RAG seeding)
+├── csv/               # Sample CSV data
+├── sql/               # SQL schema + seed data
+├── chroma/            # ChromaDB persistence (gitignored)
+├── prompts/           # Prompt templates (reference)
+└── scripts/           # Utility scripts
 
 tests/
-├── manual/          # Manual smoke tests for MCP and FastAPI health
-│   ├── test_mcp_smoke.py
-│   └── test_agent_health_smoke.py
-├── unit/
-└── integration/
+├── unit/              # Unit tests
+├── integration/       # RAG accuracy tests
+├── manual/            # E2E smoke tests & advanced test suite
+└── results/           # Test result JSON reports
 ```
 
 ## Manual Smoke Tests
 
-Start `postgresql-mcp-server` with Streamable HTTP transport first:
+Ensure `postgresql-mcp-server` is running on port 8000:
 
 ```bash
 cd ../postgresql-mcp-server
-
-# Set POSTGRESQL_CONNECTION_STRING in your shell or .env first.
-# Example shape only: postgresql://<user>:<password>@<host>:<port>/<db_name>
-fastmcp run src/postgresql_mcp/app.py:mcp \
-    --transport streamable-http \
-    --host <mcp_host> \
-    --port <mcp_port>
+fastmcp run src/postgresql_mcp/app.py:mcp --transport streamable-http --port 8000
 ```
 
-Run direct MCP smoke test from `text2sql-agent`:
+Run MCP smoke test:
 
 ```bash
-cd /path/to/text2sql-agent
-
-POSTGRESQL_MCP_SERVER_URL="http://<mcp_host>:<mcp_port>/mcp/" \
-conda run -n eog-agent python tests/manual/test_mcp_smoke.py
+python tests/manual/test_mcp_smoke.py
 ```
 
-Run FastAPI health smoke test:
+Run agent health smoke test (requires agent running on port 8080):
 
 ```bash
-cd /path/to/text2sql-agent
-
-POSTGRESQL_MCP_SERVER_URL="http://<mcp_host>:<mcp_port>/mcp/" \
-conda run -n eog-agent uvicorn text2sql_agent.main:app --host <agent_host> --port <agent_port> --reload
+python tests/manual/test_agent_health_smoke.py
 ```
 
-In another terminal:
+Run advanced E2E test suite:
 
 ```bash
-cd /path/to/text2sql-agent
-AGENT_BASE_URL="http://<agent_host>:<agent_port>" \
-conda run -n eog-agent python tests/manual/test_agent_health_smoke.py
+python tests/manual/test_agent_advanced.py
+python tests/manual/test_agent_advanced.py --category multi_join
+python tests/manual/test_agent_advanced.py --report
 ```
 
 ## API Endpoints
@@ -234,11 +234,11 @@ Key metrics: Execution Accuracy (≥85%), Schema Linking (≥95%), Classificatio
 **Current:** Single PostgreSQL backend via `postgresql-mcp-server`.
 
 **Planned:**
-- Multi-backend support (BigQuery, MySQL) via registry-based factory — switch with `MCP_BACKEND` env var
-- Cross-database queries — agent orchestrates sub-queries across multiple backends and merges results
-- Federated query engine integration (Trino/Presto) for complex cross-db analytics
+- Multi-backend support (BigQuery, MySQL) via registry-based factory
+- Evaluation framework with automated accuracy measurement
+- Cross-database queries via federated query engine
 
-See [docs/PLAN.md](docs/PLAN.md) Phase 12 for details.
+See [docs/PLAN.md](docs/PLAN.md) for details.
 
 ## License
 
