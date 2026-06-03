@@ -1,9 +1,11 @@
 """LLM provider factory.
 
 Creates LangChain chat model instances based on configuration.
-Currently supports OpenAI; extensible to other providers.
+Supports OpenAI and AWS Bedrock (Claude).
 """
 
+import boto3
+from langchain_aws import ChatBedrockConverse
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
@@ -33,10 +35,23 @@ def get_llm(
     temperature = temperature if temperature is not None else settings.llm_temperature
 
     if provider == LLMProvider.OPENAI:
-        return ChatOpenAI(
+        kwargs: dict = {
+            "model": model,
+            "temperature": temperature,
+        }
+        if settings.llm_api_key:
+            kwargs["api_key"] = settings.llm_api_key
+        return ChatOpenAI(**kwargs)
+
+    if provider == LLMProvider.BEDROCK:
+        session = boto3.Session(
+            region_name=settings.aws_region,
+            profile_name=settings.aws_profile,
+        )
+        return ChatBedrockConverse(
             model=model,
-            api_key=settings.llm_api_key,
             temperature=temperature,
+            client=session.client("bedrock-runtime"),
         )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")

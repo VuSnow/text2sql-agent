@@ -87,15 +87,6 @@ Output:
 }
 ```
 
-**Remaining prompts (created alongside their nodes in Phase 5):**
-- Clarification prompt → Phase 5.3 (`clarify_question` node)
-- SQL generation prompt → Phase 5.7 (`generate_sql` node)
-- Semantic check prompt → Phase 5.9 (`semantic_check_sql` node)
-- Repair prompt → Phase 5.10 (`repair_sql` node)
-
-**Dependencies:** Phase 1
-**Exit criteria:** Can instantiate LLM provider. Classification prompt tested with .format().
-
 ---
 
 ## Phase 4: RAG — Vector Store & Seeding
