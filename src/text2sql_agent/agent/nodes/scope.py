@@ -30,13 +30,14 @@ async def select_schema_scope(state: AgentState) -> AgentState:
     candidate_tables = [r.table_name for r in results]
 
     # Apply allowlist if configured
-    if settings.table_allowlist:
+    allowlist = settings.table_allowlist_parsed
+    if allowlist:
         candidate_tables = [
-            t for t in candidate_tables if t in settings.table_allowlist
+            t for t in candidate_tables if t in allowlist
         ]
         # Fallback to full allowlist if no intersection
         if not candidate_tables:
-            candidate_tables = list(settings.table_allowlist)
+            candidate_tables = list(allowlist)
 
     # Take top 5 most relevant
     candidate_tables = candidate_tables[:5]

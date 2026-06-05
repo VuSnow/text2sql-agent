@@ -157,10 +157,10 @@ class Settings(BaseSettings):
 
     # ─── Schema Scope ────────────────────────────────────────────────────────
 
-    table_allowlist: list[str] = Field(
-        default_factory=list,
+    table_allowlist: str = Field(
+        "",
         alias="TABLE_ALLOWLIST",
-        description="Comma-separated list of allowed tables.",
+        description="Comma-separated list of allowed tables (empty = all).",
     )
 
     schema_name: str = Field(
@@ -183,6 +183,13 @@ class Settings(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @property
+    def table_allowlist_parsed(self) -> list[str]:
+        """Parse comma-separated TABLE_ALLOWLIST into list."""
+        if not self.table_allowlist.strip():
+            return []
+        return [t.strip() for t in self.table_allowlist.split(",") if t.strip()]
 
 
 settings = Settings()

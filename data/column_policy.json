@@ -477,5 +477,33 @@
       "created_at"
     ],
     "max_rows": 100
+  },
+  "public.external_bank_accounts": {
+    "allowed_columns": [
+      "id",
+      "account_no",
+      "account_holder_name",
+      "bank_code",
+      "bank_name",
+      "status",
+      "created_at"
+    ],
+    "sampleable_columns": [
+      "bank_code",
+      "bank_name",
+      "status"
+    ],
+    "required_filter_columns": [],
+    "allow_aggregates_without_filter": true,
+    "group_by_columns": [
+      "bank_code",
+      "bank_name",
+      "status"
+    ],
+    "max_rows": 100,
+    "pii_columns": [
+      "id_number",
+      "phone"
+    ]
   }
 }
