@@ -65,11 +65,15 @@ BANKING QUERY RULES:
    - Use card identifier or account/customer relationship from schema.
    - Do not expose full card numbers unless schema/policy explicitly allows it.
 7. For beneficiary/recipient lookup by name or nickname:
-   - ALWAYS use the beneficiaries table with cif_no filter.
+   - ALWAYS query the beneficiaries table DIRECTLY with cif_no filter.
+   - Do NOT JOIN beneficiaries with transactions via beneficiary_id for name lookups.
    - Use ILIKE for fuzzy name matching: beneficiary_name ILIKE '%keyword%' OR nickname ILIKE '%keyword%'
    - Return: beneficiary_name, beneficiary_account_no, beneficiary_bank_code, beneficiary_bank_name, nickname.
    - ORDER BY last_used_at DESC NULLS LAST to prioritize recently used recipients.
    - The keyword from user may be a partial name (e.g. "Tuan" matches "Bui Duc Tuan").
+   - Do NOT use UNION or UNION ALL to combine beneficiaries and transactions queries.
+
+8. NEVER use UNION or UNION ALL. If you need data from multiple tables, use JOINs or separate queries.
 
 DO NOT GUESS:
 If the required table, column, join path, filter, or metric is not available in the provided schema context,

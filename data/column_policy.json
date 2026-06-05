@@ -505,5 +505,71 @@
       "id_number",
       "phone"
     ]
+  },
+  "public.bills": {
+    "allowed_columns": [
+      "bill_id",
+      "biller_code",
+      "customer_bill_code",
+      "bill_period",
+      "amount_due",
+      "due_date",
+      "status",
+      "created_at",
+      "paid_at"
+    ],
+    "sampleable_columns": [
+      "biller_code",
+      "customer_bill_code",
+      "bill_period",
+      "status"
+    ],
+    "required_filter_columns": [
+      "customer_bill_code"
+    ],
+    "allow_aggregates_without_filter": true,
+    "group_by_columns": [
+      "biller_code",
+      "bill_period",
+      "status"
+    ],
+    "max_rows": 100
+  },
+  "public.interest_rates": {
+    "allowed_columns": [
+      "id",
+      "product_code",
+      "product_type",
+      "product_name",
+      "currency",
+      "term_months",
+      "annual_rate",
+      "min_amount",
+      "max_amount",
+      "customer_segment",
+      "channel",
+      "effective_from",
+      "effective_to",
+      "status",
+      "created_at"
+    ],
+    "sampleable_columns": [
+      "product_code",
+      "product_type",
+      "product_name",
+      "channel",
+      "customer_segment",
+      "status"
+    ],
+    "required_filter_columns": [],
+    "allow_aggregates_without_filter": true,
+    "group_by_columns": [
+      "product_type",
+      "term_months",
+      "channel",
+      "customer_segment",
+      "status"
+    ],
+    "max_rows": 200
   }
 }
