@@ -5,7 +5,7 @@
 ## Tables Used: beneficiaries, external_bank_accounts
 
 ## Question (Vietnamese)
-Đối chiếu danh bạ người nhận đã lưu của khách hàng CIF001 với thông tin tài khoản thực tế. Có tài khoản nào đã bị đóng hoặc khóa không?
+Đối chiếu danh bạ người nhận đã lưu của khách hàng CIF000001 với thông tin tài khoản thực tế. Có tài khoản nào đã bị đóng hoặc khóa không?
 
 ## Join Logic
 - Cần `beneficiaries` để lấy danh sách người nhận đã lưu.
@@ -32,7 +32,7 @@ FROM beneficiaries b
 LEFT JOIN external_bank_accounts e
     ON b.beneficiary_account_no = e.account_no
     AND b.beneficiary_bank_code = e.bank_code
-WHERE b.cif_no = 'CIF001'
+WHERE b.cif_no = 'CIF000001'
   AND b.is_saved = TRUE
 ORDER BY check_result DESC, b.last_used_at DESC;
 ```

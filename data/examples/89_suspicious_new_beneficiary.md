@@ -8,7 +8,7 @@
 Tìm beneficiary được thêm trong 7 ngày gần đây và đã nhận chuyển khoản > 50 triệu. (Có thể suspicious)
 
 ## Join Logic
-- Cần `beneficiaries` để filter registered_at gần đây.
+- Cần `beneficiaries` để filter created_at gần đây.
 - Cần `transactions` để check số tiền chuyển cho beneficiary đó.
 - **JOIN path**: `transactions.beneficiary_id = beneficiaries.beneficiary_id`
 - GROUP BY beneficiary, HAVING SUM > threshold.
@@ -18,19 +18,19 @@ Tìm beneficiary được thêm trong 7 ngày gần đây và đã nhận chuy�
 SELECT
     b.cif_no,
     b.beneficiary_name,
-    b.bank_name,
-    b.account_no AS recipient_account,
-    b.registered_at,
+    b.beneficiary_bank_name,
+    b.beneficiary_account_no AS recipient_account,
+    b.created_at,
     COUNT(t.transaction_id) AS transfer_count,
     SUM(t.amount) AS total_transferred,
     MAX(t.amount) AS max_single_transfer
 FROM beneficiaries b
 JOIN transactions t ON b.beneficiary_id = t.beneficiary_id
-WHERE b.registered_at >= CURRENT_DATE - INTERVAL '7 days'
+WHERE b.created_at >= CURRENT_DATE - INTERVAL '7 days'
   AND t.transaction_type = 'BANK_TRANSFER'
   AND t.direction = 'OUT'
   AND t.status = 'SUCCESS'
-GROUP BY b.beneficiary_id, b.cif_no, b.beneficiary_name, b.bank_name, b.account_no, b.registered_at
+GROUP BY b.beneficiary_id, b.cif_no, b.beneficiary_name, b.beneficiary_bank_name, b.beneficiary_account_no, b.created_at
 HAVING SUM(t.amount) > 50000000
 ORDER BY total_transferred DESC
 LIMIT 20;

@@ -4,7 +4,6 @@
 -- ============================================================
 
 -- Drop tables in reverse dependency order
-DROP TABLE IF EXISTS external_bank_accounts CASCADE;
 DROP TABLE IF EXISTS fraud_decisions CASCADE;
 DROP TABLE IF EXISTS reported_customers CASCADE;
 DROP TABLE IF EXISTS reported_accounts CASCADE;
@@ -260,19 +259,3 @@ CREATE INDEX idx_fraud_reports_account ON fraud_reports(reported_account_no, rep
 CREATE INDEX idx_reported_accounts_lookup ON reported_accounts(account_no, bank_code);
 CREATE INDEX idx_reported_customers_cif ON reported_customers(cif_no);
 CREATE INDEX idx_fraud_decisions_action ON fraud_decisions(action_id);
-
-CREATE TABLE external_bank_accounts (
-    id SERIAL PRIMARY KEY,
-    account_no VARCHAR(20) NOT NULL,
-    account_holder_name VARCHAR(100) NOT NULL,
-    bank_code VARCHAR(10) NOT NULL,
-    bank_name VARCHAR(50) NOT NULL,
-    id_number VARCHAR(20),
-    phone VARCHAR(15),
-    status VARCHAR(10) CHECK(status IN ('ACTIVE','CLOSED','SUSPENDED')) DEFAULT 'ACTIVE',
-    created_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(account_no, bank_code)
-);
-
-CREATE INDEX idx_external_bank_accounts_lookup ON external_bank_accounts(account_no, bank_code);
-CREATE INDEX idx_external_bank_accounts_bank ON external_bank_accounts(bank_code);

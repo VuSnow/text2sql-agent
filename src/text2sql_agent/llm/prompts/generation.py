@@ -64,6 +64,12 @@ BANKING QUERY RULES:
 6. For card questions:
    - Use card identifier or account/customer relationship from schema.
    - Do not expose full card numbers unless schema/policy explicitly allows it.
+7. For beneficiary/recipient lookup by name or nickname:
+   - ALWAYS use the beneficiaries table with cif_no filter.
+   - Use ILIKE for fuzzy name matching: beneficiary_name ILIKE '%keyword%' OR nickname ILIKE '%keyword%'
+   - Return: beneficiary_name, beneficiary_account_no, beneficiary_bank_code, beneficiary_bank_name, nickname.
+   - ORDER BY last_used_at DESC NULLS LAST to prioritize recently used recipients.
+   - The keyword from user may be a partial name (e.g. "Tuan" matches "Bui Duc Tuan").
 
 DO NOT GUESS:
 If the required table, column, join path, filter, or metric is not available in the provided schema context,
